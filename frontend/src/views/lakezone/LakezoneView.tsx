@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 
 import { downloadEntries, listEntries, moduleMeta, runAction as applyAction } from '@/api/local-service'
 import type { EntryRow } from '@/data/types'
+import ArchivePanel from './ArchivePanel'
 
 const meta = moduleMeta('lakezone')
 const columns = [
@@ -24,20 +25,6 @@ const statuses = [
   "待校验",
   "已启用",
   "已停用"
-]
-const stats = [
-  {
-    "label": "分区方案总数",
-    "value": 0
-  },
-  {
-    "label": "已启用方案",
-    "value": 0
-  },
-  {
-    "label": "待校验方案",
-    "value": 0
-  }
 ]
 
 export default function LakezoneView() {
@@ -62,6 +49,22 @@ export default function LakezoneView() {
     reload()
   }, [reload])
 
+  // 同目标表出现多条方案即存在新旧口径冲突，页面给出提示，执行时以已启用方案为准。
+  const conflictTables = useMemo(() => {
+    const countByTable = new Map<string, number>()
+    rows.forEach((row) => {
+      const name = String(row['目标表名'] ?? '')
+      countByTable.set(name, (countByTable.get(name) ?? 0) + 1)
+    })
+    return new Set([...countByTable.entries()].filter(([, count]) => count > 1).map(([name]) => name))
+  }, [rows])
+
+  const stats = useMemo(() => [
+    { label: "分区方案总数", value: rows.length },
+    { label: "已启用方案", value: rows.filter((row) => String(row.status) === "已启用").length },
+    { label: "待校验方案", value: rows.filter((row) => String(row.status) === "待校验").length },
+  ], [rows])
+
   function runAction(action: string, row: EntryRow) {
     setErrorMessage('')
     const result = applyAction(meta.key, Number(row.id), action)
@@ -77,7 +80,7 @@ export default function LakezoneView() {
       <header className="page-head">
         <div>
           <h2>湖区分区管理</h2>
-          <p className="page-desc">维护湖区分区方案的输入、执行约束与结果记录，为湖区分区提供可验证的数据工程流程。</p>
+          <p className="page-desc">维护湖区分区方案的输入、执行约束与结果记录，并按方案口径执行分区归档，为湖区分区提供可验证的数据工程流程。</p>
         </div>
         <div className="page-actions">
           <button className="btn primary" type="button" onClick={() => setErrorMessage('分区方案登记入口尚未接入审批流')}>
@@ -104,6 +107,11 @@ export default function LakezoneView() {
             {status}：{rows.filter((row) => String(row.status) === status).length}
           </span>
         ))}
+        {conflictTables.size > 0 && (
+          <span className="legend-item" style={{ background: '#fee2e2', color: '#b42318' }}>
+            新旧口径冲突表：{[...conflictTables].join('、')}
+          </span>
+        )}
       </p>
 
       <form className="filter-bar" onSubmit={(event) => { event.preventDefault(); reload() }}>
@@ -126,6 +134,7 @@ export default function LakezoneView() {
           <tr>
             {columns.map((column) => <th key={column}>{column}</th>)}
             <th>当前状态</th>
+            <th>口径提示</th>
             <th>可执行动作</th>
           </tr>
         </thead>
@@ -134,6 +143,15 @@ export default function LakezoneView() {
             <tr key={String(row.id)}>
               {columns.map((column) => <td key={column}>{row[column] ?? '—'}</td>)}
               <td>{row.status}</td>
+              <td>
+                {conflictTables.has(String(row['目标表名'] ?? '')) ? (
+                  <span className="badge fail">
+                    {String(row.status) === '已启用' ? '当前权威口径' : '新旧口径冲突，待启用方案裁决'}
+                  </span>
+                ) : (
+                  <span className="badge idle">口径唯一</span>
+                )}
+              </td>
               <td className="row-actions">
                 {actions.map((action) => (
                   <button key={action} className="link" type="button" onClick={() => runAction(action, row)}>
@@ -145,11 +163,13 @@ export default function LakezoneView() {
           ))}
           {rows.length === 0 && (
             <tr>
-              <td className="empty-state" colSpan={columns.length + 2}>暂无湖区分区数据，可先登记分区方案</td>
+              <td className="empty-state" colSpan={columns.length + 3}>暂无湖区分区数据，可先登记分区方案</td>
             </tr>
           )}
         </tbody>
       </table>
+
+      <ArchivePanel />
 
       <footer className="page-foot">
         <span>共 {total} 条湖区分区记录</span>
